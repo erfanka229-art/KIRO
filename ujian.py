@@ -45,7 +45,7 @@ GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "MASUKKAN_API_KEY_GROQ_ANDA")
 GROQ_MODEL     = "llama-3.3-70b-versatile"
 GROQ_URL       = "https://api.groq.com/openai/v1/chat/completions"
 
-UJIAN_URL      = "https://semesterpendek.gunadarma.ac.id/uman_ujian_pilih_mk.aspx"
+UJIAN_URL      = "https://semesterpendek.gunadarma.ac.id/uman_ujian.aspx"
 
 DELAY_SEBELUM_SIMPAN = 1.5   # detik tunggu setelah pilih jawaban
 DELAY_SETELAH_SIMPAN = 2.0   # detik tunggu setelah klik Simpan (halaman refresh)
@@ -549,11 +549,12 @@ async def proses_soal(page: Page, nomor: int) -> bool:
 async def ada_soal(page: Page) -> bool:
     """Cek apakah halaman saat ini adalah halaman soal ujian"""
     url = page.url.lower()
-    # Jika URL berubah jauh dari ujian, berarti sudah selesai
-    if "uman_ujian" not in url and "ujian" not in url:
+
+    # Harus di halaman ujian (uman_ujian.aspx), BUKAN halaman pilih MK
+    if "uman_ujian.aspx" not in url:
         return False
 
-    # Cek apakah ada radio button (tanda ada soal)
+    # Cek apakah ada radio button (tanda ada soal pilihan ganda)
     count = await page.locator("input[type='radio']").count()
     return count > 0
 
@@ -666,6 +667,22 @@ async def main():
         pages = context.pages
         page  = pages[0] if pages else page
 
+        # Tunggu sampai benar-benar di halaman soal
+        info("Menunggu halaman soal ujian...")
+        for _ in range(30):  # tunggu max 30 detik
+            pages = context.pages
+            if pages:
+                page = pages[0]
+                if await ada_soal(page):
+                    ok(f"Halaman soal terdeteksi: {page.url}")
+                    break
+            await asyncio.sleep(1)
+        else:
+            warn("Halaman soal tidak terdeteksi setelah 30 detik.")
+            warn(f"URL saat ini: {page.url}")
+            warn("Pastikan Anda sudah di halaman soal (uman_ujian.aspx)")
+            input("  ⏎  Tekan ENTER jika soal sudah tampil untuk coba lagi... ")
+
         # Loop jawab soal
         nomor   = 1
         max_soal = 200
@@ -679,6 +696,7 @@ async def main():
             page = pages[0]
 
             if not await ada_soal(page):
+                warn(f"Bukan halaman soal. URL: {page.url}")
                 ok("Tidak ada soal lagi. Ujian selesai!")
                 break
 
