@@ -194,69 +194,70 @@ def ekstrak_huruf(ai_response: str) -> str | None:
 #  BACA SOAL DARI HALAMAN
 # ─────────────────────────────────────────────
 async def baca_soal(page: Page) -> str | None:
-    """Baca teks soal dari DOM halaman ujian Gunadarma"""
-
-    # Tunggu halaman load
+    """Baca teks soal dari DOM halaman ujian Gunadarma.
+    
+    Strategi: ambil semua teks visible di halaman (tanpa filter),
+    lalu cari baris yang paling mungkin jadi soal (sebelum radio button pertama).
+    """
     await page.wait_for_load_state("domcontentloaded")
-    await asyncio.sleep(0.5)  # Tunggu render selesai
+    await asyncio.sleep(0.8)
 
-    # Gunadarma ASP.NET: soal biasanya ada di dalam <span> atau <td>
-    # dengan font berwarna (style color) - ciri khas halaman ujian Gunadarma
-    soal_text = await page.evaluate("""
+    # Ambil seluruh innerText halaman - cara paling reliable
+    # Tidak ada filter regex yang bisa salah blokir soal
+    semua_teks = await page.evaluate("""
         () => {
-            // Strategi 1: Cari <span> atau <td> dengan style font/color
-            // yang biasa dipakai Gunadarma untuk teks soal
-            const candidates = [];
-
-            // Semua elemen teks yang mungkin berisi soal
-            const els = document.querySelectorAll('span, td, p, div, font');
-            for (const el of els) {
-                // Skip elemen yang ada di dalam script/style
-                if (['script','style','noscript','head'].includes(
-                    el.tagName.toLowerCase())) continue;
-
-                // Ambil hanya teks LANGSUNG dari elemen ini (bukan anak)
-                const directText = Array.from(el.childNodes)
-                    .filter(n => n.nodeType === 3) // TEXT_NODE
-                    .map(n => n.textContent.trim())
-                    .join(' ')
-                    .trim();
-
-                const fullText = el.innerText?.trim() || '';
-
-                // Soal: teks 20-500 karakter, bukan teks navigasi/label
-                if (fullText.length >= 20 && fullText.length <= 500) {
-                    const skip = /simpan|waktu ujian|waktu menjawab|pilihlah|pass\\s*\\/|tidak menjawab|copyright|gunadarma|logout|selamat datang|\\d+\\s*detik/i;
-                    if (!skip.test(fullText)) {
-                        candidates.push({ text: fullText, el });
-                    }
-                }
-            }
-
-            // Pilih kandidat terpendek yang paling mungkin jadi soal
-            // (bukan container besar yang isinya semua teks halaman)
-            candidates.sort((a, b) => a.text.length - b.text.length);
-            if (candidates.length > 0) return candidates[0].text;
-
-            // Strategi 2: Cari semua text node
+            // Kumpulkan semua text node visible, satu per baris
+            const lines = [];
             const walker = document.createTreeWalker(
                 document.body, NodeFilter.SHOW_TEXT, null
             );
             let node;
-            const skip2 = /simpan|waktu|pilihlah|pass|tidak menjawab|copyright|gunadarma|logout|selamat/i;
             while ((node = walker.nextNode())) {
-                const t = node.textContent.trim();
                 const tag = node.parentElement?.tagName?.toLowerCase();
-                if (t.length >= 20 && t.length <= 500
-                    && !skip2.test(t)
-                    && !['script','style','noscript'].includes(tag)) {
-                    return t;
-                }
+                // Skip script/style
+                if (['script','style','noscript','head','meta'].includes(tag)) continue;
+                const t = node.textContent.replace(/\\s+/g, ' ').trim();
+                if (t.length >= 5) lines.push(t);
             }
-            return null;
+            return lines;
         }
     """)
-    return soal_text
+
+    if not semua_teks:
+        return None
+
+    debug(f"Total baris teks: {len(semua_teks)}")
+
+    # Cari baris yang merupakan soal:
+    # Soal biasanya:
+    # 1. Panjang 20-600 karakter
+    # 2. Bukan teks UI (simpan, waktu, pilihlah, copyright)
+    # 3. Mengandung kata tanya atau pernyataan akademis
+    # 4. Muncul SEBELUM pilihan jawaban
+    
+    ui_pattern = re.compile(
+        r'^(simpan|waktu|pilihlah|pass|tidak menjawab|copyright|'
+        r'gunadarma|logout|selamat|bobot|penalti|sisa soal|dns|'
+        r'jika ujian|hasil ujian|\d+\s*(detik|menit)|jam\s*\d+)'
+        r'|^\d+$',
+        re.I
+    )
+    
+    kandidat = []
+    for t in semua_teks:
+        if 20 <= len(t) <= 600 and not ui_pattern.match(t):
+            kandidat.append(t)
+    
+    if not kandidat:
+        # Fallback: kembalikan teks terpanjang yang bukan UI
+        for t in sorted(semua_teks, key=len, reverse=True):
+            if len(t) >= 20:
+                return t
+        return None
+    
+    # Pilih kandidat pertama (urutan DOM = urutan tampil di halaman)
+    # Soal selalu muncul sebelum pilihan jawaban
+    return kandidat[0]
 
 
 async def baca_pilihan(page: Page) -> list[dict]:
@@ -315,54 +316,48 @@ async def baca_pilihan(page: Page) -> list[dict]:
 
 
 async def debug_html(page: Page):
-    """Dump HTML dan teks halaman untuk debugging - jalankan jika soal tidak terdeteksi"""
+    """Dump semua teks halaman ke terminal untuk debugging"""
     info("=== DEBUG HTML DUMP ===")
+    info(f"URL: {page.url}")
 
-    # Tampilkan semua teks terlihat di halaman
-    teks_list = await page.evaluate("""
+    # Dump semua teks mentah
+    semua = await page.evaluate("""
         () => {
-            const result = [];
+            const lines = [];
             const walker = document.createTreeWalker(
                 document.body, NodeFilter.SHOW_TEXT, null
             );
             let node;
             while ((node = walker.nextNode())) {
-                const t = node.textContent.trim();
                 const tag = node.parentElement?.tagName?.toLowerCase();
-                if (t.length > 5 && !['script','style','noscript'].includes(tag)) {
-                    result.push({
+                if (['script','style','noscript'].includes(tag)) continue;
+                const t = node.textContent.replace(/\\s+/g,' ').trim();
+                if (t.length >= 3) {
+                    lines.push({
                         tag: node.parentElement?.tagName,
-                        id: node.parentElement?.id,
-                        cls: node.parentElement?.className?.slice(0,30),
-                        text: t.slice(0,120)
+                        id: node.parentElement?.id || '',
+                        text: t
                     });
                 }
             }
-            return result.slice(0, 30); // ambil 30 pertama
+            return lines;
         }
     """)
 
-    print(f"\n{C.YELLOW}--- Semua teks di halaman ---{C.RESET}")
-    for i, item in enumerate(teks_list):
-        print(f"  [{i}] <{item['tag']} id='{item['id']}' class='{item['cls']}'> : {item['text']}")
+    print(f"\n{C.YELLOW}--- Semua teks ({len(semua)} baris) ---{C.RESET}")
+    for i, item in enumerate(semua[:40]):
+        print(f"  [{i:02d}] <{item['tag']} id='{item['id']}'> {item['text'][:100]}")
 
-    # Tampilkan semua radio button
+    # Radio buttons
     radios = await page.evaluate("""
-        () => {
-            return [...document.querySelectorAll('input[type="radio"]')].map((r, i) => ({
-                id: r.id,
-                name: r.name,
-                value: r.value,
-                parent: r.parentElement?.innerText?.replace(/\\s+/g,' ').trim().slice(0,80)
-            }));
-        }
+        () => [...document.querySelectorAll('input[type="radio"]')].map((r,i) => ({
+            id: r.id, name: r.name, value: r.value,
+            label: r.parentElement?.innerText?.replace(/\\s+/g,' ').trim().slice(0,80) || ''
+        }))
     """)
     print(f"\n{C.YELLOW}--- Radio buttons ({len(radios)}) ---{C.RESET}")
     for r in radios:
-        print(f"  id='{r['id']}' name='{r['name']}' value='{r['value']}' | {r['parent']}")
-
-    print(f"\n{C.YELLOW}--- URL saat ini ---{C.RESET}")
-    print(f"  {page.url}")
+        print(f"  {r['name']}={r['value']} id={r['id']} | {r['label']}")
     print(f"{C.YELLOW}========================={C.RESET}\n")
 
 
