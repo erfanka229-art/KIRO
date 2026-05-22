@@ -198,41 +198,59 @@ async def baca_soal(page: Page) -> str | None:
 
     # Tunggu halaman load
     await page.wait_for_load_state("domcontentloaded")
+    await asyncio.sleep(0.5)  # Tunggu render selesai
 
-    # Coba selector spesifik dulu (ASP.NET biasanya punya id mengandung 'soal'/'Label')
-    spesifik = [
-        "[id*='oal']", "[id*='Soal']", "[id*='question']",
-        "[id*='Question']", "[id*='soalLabel']", "[id*='lblSoal']",
-    ]
-    for sel in spesifik:
-        try:
-            el = page.locator(sel).first
-            count = await el.count()
-            if count > 0:
-                txt = (await el.inner_text()).strip()
-                if len(txt) > 15 and not re.search(r'pilihlah|waktu', txt, re.I):
-                    return txt
-        except Exception:
-            pass
-
-    # Fallback: evaluasi JS untuk cari text node panjang
+    # Gunadarma ASP.NET: soal biasanya ada di dalam <span> atau <td>
+    # dengan font berwarna (style color) - ciri khas halaman ujian Gunadarma
     soal_text = await page.evaluate("""
         () => {
+            // Strategi 1: Cari <span> atau <td> dengan style font/color
+            // yang biasa dipakai Gunadarma untuk teks soal
+            const candidates = [];
+
+            // Semua elemen teks yang mungkin berisi soal
+            const els = document.querySelectorAll('span, td, p, div, font');
+            for (const el of els) {
+                // Skip elemen yang ada di dalam script/style
+                if (['script','style','noscript','head'].includes(
+                    el.tagName.toLowerCase())) continue;
+
+                // Ambil hanya teks LANGSUNG dari elemen ini (bukan anak)
+                const directText = Array.from(el.childNodes)
+                    .filter(n => n.nodeType === 3) // TEXT_NODE
+                    .map(n => n.textContent.trim())
+                    .join(' ')
+                    .trim();
+
+                const fullText = el.innerText?.trim() || '';
+
+                // Soal: teks 20-500 karakter, bukan teks navigasi/label
+                if (fullText.length >= 20 && fullText.length <= 500) {
+                    const skip = /simpan|waktu ujian|waktu menjawab|pilihlah|pass\\s*\\/|tidak menjawab|copyright|gunadarma|logout|selamat datang|\\d+\\s*detik/i;
+                    if (!skip.test(fullText)) {
+                        candidates.push({ text: fullText, el });
+                    }
+                }
+            }
+
+            // Pilih kandidat terpendek yang paling mungkin jadi soal
+            // (bukan container besar yang isinya semua teks halaman)
+            candidates.sort((a, b) => a.text.length - b.text.length);
+            if (candidates.length > 0) return candidates[0].text;
+
+            // Strategi 2: Cari semua text node
             const walker = document.createTreeWalker(
-                document.body,
-                NodeFilter.SHOW_TEXT,
-                null
+                document.body, NodeFilter.SHOW_TEXT, null
             );
             let node;
-            const skip = /simpan|waktu ujian|pilihlah|pass\\s*\\/|tidak menjawab|copyright|gunadarma university|logout|selamat datang/i;
+            const skip2 = /simpan|waktu|pilihlah|pass|tidak menjawab|copyright|gunadarma|logout|selamat/i;
             while ((node = walker.nextNode())) {
                 const t = node.textContent.trim();
-                if (t.length > 25 && t.length < 500 && !skip.test(t)) {
-                    // Pastikan bukan dari script/style
-                    const tag = node.parentElement?.tagName?.toLowerCase();
-                    if (tag && !['script','style','noscript'].includes(tag)) {
-                        return t;
-                    }
+                const tag = node.parentElement?.tagName?.toLowerCase();
+                if (t.length >= 20 && t.length <= 500
+                    && !skip2.test(t)
+                    && !['script','style','noscript'].includes(tag)) {
+                    return t;
                 }
             }
             return null;
@@ -242,22 +260,20 @@ async def baca_soal(page: Page) -> str | None:
 
 
 async def baca_pilihan(page: Page) -> list[dict]:
-    """
-    Baca semua pilihan jawaban (radio button) dari halaman
-    Return: list of { text, value, element_id, name }
-    """
+    """Baca semua pilihan jawaban (radio button) dari halaman"""
     pilihan = await page.evaluate("""
         () => {
             const radios = [...document.querySelectorAll('input[type="radio"]')];
             return radios.map((r, i) => {
                 let text = '';
 
-                // Cari label[for=id]
+                // Cara 1: label[for=id]
                 if (r.id) {
                     const lbl = document.querySelector(`label[for="${r.id}"]`);
                     if (lbl) text = lbl.innerText.trim();
                 }
-                // nextSibling
+
+                // Cara 2: nextSibling text node
                 if (!text) {
                     let s = r.nextSibling;
                     while (s) {
@@ -266,22 +282,88 @@ async def baca_pilihan(page: Page) -> list[dict]:
                         s = s.nextSibling;
                     }
                 }
-                // parent
-                if (!text && r.parentElement) {
-                    text = r.parentElement.innerText.replace(/\\s+/g,' ').trim().slice(0,150);
+
+                // Cara 3: parent td atau span innerText
+                if (!text) {
+                    let p = r.parentElement;
+                    while (p && !text) {
+                        const tag = p.tagName.toLowerCase();
+                        if (['td','span','div','li'].includes(tag)) {
+                            const t = p.innerText?.replace(/\\s+/g,' ').trim();
+                            if (t && t.length > 1 && t.length < 150) {
+                                text = t;
+                            }
+                        }
+                        if (tag === 'table') break; // jangan naik terlalu jauh
+                        p = p.parentElement;
+                    }
                 }
+
+                const skip = /pass\\s*\\/\\s*tidak menjawab|pass\\s*\\//i;
                 return {
                     index: i,
-                    text: text || `Pilihan ${i+1}`,
+                    text: text.trim() || `Pilihan ${i+1}`,
                     value: r.value,
-                    id: r.id,
-                    name: r.name,
-                    skip: /pass\\/tidak menjawab/i.test(text)
+                    id: r.id || '',
+                    name: r.name || '',
+                    skip: skip.test(text)
                 };
             });
         }
     """)
     return pilihan
+
+
+async def debug_html(page: Page):
+    """Dump HTML dan teks halaman untuk debugging - jalankan jika soal tidak terdeteksi"""
+    info("=== DEBUG HTML DUMP ===")
+
+    # Tampilkan semua teks terlihat di halaman
+    teks_list = await page.evaluate("""
+        () => {
+            const result = [];
+            const walker = document.createTreeWalker(
+                document.body, NodeFilter.SHOW_TEXT, null
+            );
+            let node;
+            while ((node = walker.nextNode())) {
+                const t = node.textContent.trim();
+                const tag = node.parentElement?.tagName?.toLowerCase();
+                if (t.length > 5 && !['script','style','noscript'].includes(tag)) {
+                    result.push({
+                        tag: node.parentElement?.tagName,
+                        id: node.parentElement?.id,
+                        cls: node.parentElement?.className?.slice(0,30),
+                        text: t.slice(0,120)
+                    });
+                }
+            }
+            return result.slice(0, 30); // ambil 30 pertama
+        }
+    """)
+
+    print(f"\n{C.YELLOW}--- Semua teks di halaman ---{C.RESET}")
+    for i, item in enumerate(teks_list):
+        print(f"  [{i}] <{item['tag']} id='{item['id']}' class='{item['cls']}'> : {item['text']}")
+
+    # Tampilkan semua radio button
+    radios = await page.evaluate("""
+        () => {
+            return [...document.querySelectorAll('input[type="radio"]')].map((r, i) => ({
+                id: r.id,
+                name: r.name,
+                value: r.value,
+                parent: r.parentElement?.innerText?.replace(/\\s+/g,' ').trim().slice(0,80)
+            }));
+        }
+    """)
+    print(f"\n{C.YELLOW}--- Radio buttons ({len(radios)}) ---{C.RESET}")
+    for r in radios:
+        print(f"  id='{r['id']}' name='{r['name']}' value='{r['value']}' | {r['parent']}")
+
+    print(f"\n{C.YELLOW}--- URL saat ini ---{C.RESET}")
+    print(f"  {page.url}")
+    print(f"{C.YELLOW}========================={C.RESET}\n")
 
 
 # ─────────────────────────────────────────────
@@ -378,7 +460,8 @@ async def proses_soal(page: Page, nomor: int) -> bool:
     # 1. Baca soal
     teks = await baca_soal(page)
     if not teks:
-        warn("Soal tidak terdeteksi di halaman ini (mungkin bukan halaman soal)")
+        warn("Soal tidak terdeteksi!")
+        await debug_html(page)  # otomatis dump HTML untuk debug
         return False
     soal_log(teks[:200] + ("..." if len(teks) > 200 else ""))
 
@@ -605,12 +688,15 @@ async def main():
                 print()
                 warn("Gagal memproses soal ini.")
                 pilihan_user = input(
-                    "  [r] Retry  [s] Skip (klik Simpan manual dulu)  [q] Quit → "
+                    "  [r] Retry  [d] Debug DOM  [s] Skip  [q] Quit → "
                 ).strip().lower()
 
                 if pilihan_user == "q":
                     info("Dihentikan oleh user.")
                     break
+                elif pilihan_user == "d":
+                    await debug_html(page)
+                    continue
                 elif pilihan_user == "s":
                     warn("Silakan klik Simpan manual di browser!")
                     input("  ⏎  Tekan ENTER setelah Anda klik Simpan... ")
