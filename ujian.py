@@ -2,27 +2,44 @@
 AUTO ANSWER UJIAN GUNADARMA
 Menggunakan Playwright (Python) + Groq AI
 
-Cara Pakai:
-1. Install: pip install -r requirements.txt
-2. Install browser: playwright install chromium
-3. Jalankan: python ujian.py
-4. Browser terbuka → login manual di halaman Gunadarma
-5. Setelah login & pilih mata kuliah, tekan ENTER di terminal
-6. Script otomatis jawab semua soal
+=== CARA PAKAI ===
 
-Isi API key Groq di variabel GROQ_API_KEY di bawah
-Atau set environment variable: GROQ_API_KEY=gsk_xxx
+1. Install dependensi:
+   pip install -r requirements.txt
+
+2. Set API Key Groq:
+   - Edit baris GROQ_API_KEY di bawah, ATAU
+   - Windows : set GROQ_API_KEY=gsk_xxx
+   - Linux   : export GROQ_API_KEY=gsk_xxx
+
+3. Jalankan script:
+   python ujian.py
+
+4. Browser Chrome ASLI akan terbuka (bukan Chromium Playwright)
+   → Website tidak bisa mendeteksi automation
+
+5. Login manual di browser, pilih mata kuliah
+6. Setelah soal pertama tampil → tekan ENTER di terminal
+7. Script otomatis jawab semua soal!
+
+=== KENAPA PAKAI CHROME ASLI? ===
+Gunadarma mendeteksi Playwright/Chromium via CDP fingerprint.
+Script ini memakai Chrome yang sudah terinstall di komputer Anda
+dengan cara yang sama persis seperti user biasa membuka browser.
 """
 
 import asyncio
 import os
 import re
 import sys
+import subprocess
+import platform
+import time
 import httpx
 from playwright.async_api import async_playwright, Page
 
 # ─────────────────────────────────────────────
-#  KONFIGURASI
+#  KONFIGURASI - EDIT DI SINI
 # ─────────────────────────────────────────────
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "MASUKKAN_API_KEY_GROQ_ANDA")
 GROQ_MODEL     = "llama-3.3-70b-versatile"
@@ -32,6 +49,14 @@ UJIAN_URL      = "https://semesterpendek.gunadarma.ac.id/uman_ujian_pilih_mk.asp
 
 DELAY_SEBELUM_SIMPAN = 1.5   # detik tunggu setelah pilih jawaban
 DELAY_SETELAH_SIMPAN = 2.0   # detik tunggu setelah klik Simpan (halaman refresh)
+
+# Port debugging Chrome - jangan diubah kecuali bentrok dengan aplikasi lain
+CHROME_DEBUG_PORT = 9222
+
+# Path Chrome - akan dicari otomatis, atau isi manual jika tidak ditemukan
+# Contoh Windows: r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+# Contoh Linux  : "/usr/bin/google-chrome"
+CHROME_PATH_MANUAL = ""
 
 # ─────────────────────────────────────────────
 #  WARNA TERMINAL
@@ -50,9 +75,48 @@ def info(msg):    print(f"{C.CYAN}[INFO]{C.RESET} {msg}")
 def ok(msg):      print(f"{C.GREEN}[OK]{C.RESET}   {msg}")
 def warn(msg):    print(f"{C.YELLOW}[WARN]{C.RESET} {msg}")
 def err(msg):     print(f"{C.RED}[ERR]{C.RESET}  {msg}")
-def soal(msg):    print(f"{C.BLUE}[SOAL]{C.RESET} {msg}")
+def soal_log(m):  print(f"{C.BLUE}[SOAL]{C.RESET} {m}")
 def jawab(msg):   print(f"{C.GREEN}[JWAB]{C.RESET} {C.BOLD}{msg}{C.RESET}")
 def debug(msg):   print(f"{C.GRAY}[DBG]{C.RESET}  {msg}")
+
+# ─────────────────────────────────────────────
+#  CARI PATH CHROME ASLI DI KOMPUTER
+# ─────────────────────────────────────────────
+def cari_chrome() -> str:
+    """Cari executable Chrome yang terinstall di komputer"""
+    if CHROME_PATH_MANUAL:
+        if os.path.exists(CHROME_PATH_MANUAL):
+            return CHROME_PATH_MANUAL
+        warn(f"CHROME_PATH_MANUAL tidak ditemukan: {CHROME_PATH_MANUAL}")
+
+    os_name = platform.system()
+
+    if os_name == "Windows":
+        kandidat = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",  # Edge sebagai fallback
+        ]
+    elif os_name == "Darwin":  # macOS
+        kandidat = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ]
+    else:  # Linux
+        kandidat = [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+            "/snap/bin/chromium",
+        ]
+
+    for path in kandidat:
+        if os.path.exists(path):
+            return path
+
+    return ""
 
 # ─────────────────────────────────────────────
 #  GROQ API
@@ -316,7 +380,7 @@ async def proses_soal(page: Page, nomor: int) -> bool:
     if not teks:
         warn("Soal tidak terdeteksi di halaman ini (mungkin bukan halaman soal)")
         return False
-    soal(teks[:200] + ("..." if len(teks) > 200 else ""))
+    soal_log(teks[:200] + ("..." if len(teks) > 200 else ""))
 
     # 2. Baca pilihan
     pilihan_raw = await baca_pilihan(page)
@@ -418,7 +482,7 @@ async def main():
     print(f"""
 {C.BOLD}{C.CYAN}╔══════════════════════════════════════════════════╗
 ║   AUTO ANSWER UJIAN GUNADARMA × GROQ AI         ║
-║   Playwright Python Edition                      ║
+║   Playwright Python - Chrome Asli Mode           ║
 ╚══════════════════════════════════════════════════╝{C.RESET}
 """)
 
@@ -426,85 +490,111 @@ async def main():
     if GROQ_API_KEY == "MASUKKAN_API_KEY_GROQ_ANDA":
         err("API Key belum diisi!")
         err("Edit ujian.py → isi GROQ_API_KEY")
-        err("Atau jalankan: export GROQ_API_KEY='gsk_xxx'")
+        err("Atau jalankan: set GROQ_API_KEY=gsk_xxx  (Windows)")
+        err("              export GROQ_API_KEY=gsk_xxx (Linux/Mac)")
         sys.exit(1)
 
-    info(f"Model: {GROQ_MODEL}")
-    info(f"URL  : {UJIAN_URL}")
+    info(f"Model : {GROQ_MODEL}")
+    info(f"URL   : {UJIAN_URL}")
+    info(f"Port  : {CHROME_DEBUG_PORT}")
     print()
 
+    # Cari Chrome
+    chrome_path = cari_chrome()
+    if not chrome_path:
+        err("Google Chrome tidak ditemukan di komputer!")
+        err("Install Chrome dari: https://www.google.com/chrome/")
+        err("Atau isi CHROME_PATH_MANUAL di script dengan path Chrome Anda")
+        sys.exit(1)
+    info(f"Chrome: {chrome_path}")
+
+    # Buat folder profil sementara agar tidak konflik dengan Chrome yang sudah buka
+    profil_dir = os.path.join(os.path.dirname(__file__), "chrome_profil_ujian")
+    os.makedirs(profil_dir, exist_ok=True)
+    info(f"Profil : {profil_dir}")
+    print()
+
+    # Jalankan Chrome ASLI dengan remote debugging (bukan Playwright Chromium!)
+    chrome_args = [
+        chrome_path,
+        f"--remote-debugging-port={CHROME_DEBUG_PORT}",
+        f"--user-data-dir={profil_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--start-maximized",
+        UJIAN_URL,
+    ]
+
+    info("Membuka Chrome asli...")
+    chrome_proc = subprocess.Popen(
+        chrome_args,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Tunggu Chrome siap
+    info("Menunggu Chrome siap...")
+    time.sleep(3)
+
+    # Playwright connect ke Chrome yang sudah buka (bukan launch baru)
     async with async_playwright() as p:
-        # Buka browser tanpa tanda-tanda automation
-        browser = await p.chromium.launch(
-            headless=False,
-            args=[
-                "--start-maximized",
-                "--disable-blink-features=AutomationControlled",  # sembunyikan webdriver flag
-                "--no-sandbox",
-                "--disable-infobars",                              # hapus banner "Chrome is controlled..."
-                "--disable-dev-shm-usage",
-                "--disable-extensions-except=",
-                "--disable-plugins-discovery",
-            ],
-            # Tidak pakai channel="chrome" agar lebih kompatibel lintas OS
-        )
-
-        context = await browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            # Izinkan semua permission seperti browser biasa
-            java_script_enabled=True,
-        )
-
-        # Hapus property navigator.webdriver agar tidak terdeteksi bot
-        await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            // Hapus tanda-tanda Playwright/Chromium automation
-            delete window.navigator.__proto__.webdriver;
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5],
-            });
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['id-ID', 'id', 'en-US', 'en'],
-            });
-        """)
-
-        page = await context.new_page()
-
-        # Buka halaman
-        info("Membuka halaman Gunadarma...")
         try:
-            await page.goto(UJIAN_URL, wait_until="domcontentloaded", timeout=30_000)
+            browser = await p.chromium.connect_over_cdp(
+                f"http://localhost:{CHROME_DEBUG_PORT}"
+            )
         except Exception as e:
-            warn(f"Timeout/error saat buka halaman: {e}")
-            info("Browser tetap terbuka, silakan navigasi manual.")
+            err(f"Tidak bisa connect ke Chrome: {e}")
+            err("Pastikan Chrome sudah terbuka dan port tidak diblokir firewall")
+            chrome_proc.kill()
+            sys.exit(1)
+
+        ok("Terhubung ke Chrome!")
+
+        # Ambil halaman yang sudah terbuka
+        contexts = browser.contexts
+        if not contexts:
+            err("Tidak ada context browser!")
+            chrome_proc.kill()
+            sys.exit(1)
+
+        context = contexts[0]
+        pages   = context.pages
+        page    = pages[0] if pages else await context.new_page()
+
+        # Navigasi ke halaman ujian kalau belum di sana
+        if UJIAN_URL not in page.url:
+            await page.goto(UJIAN_URL, wait_until="domcontentloaded", timeout=30_000)
 
         print(f"""
 {C.YELLOW}╔══════════════════════════════════════════════════╗
-║  AKSI ANDA DIPERLUKAN:                          ║
+║  AKSI ANDA DIPERLUKAN:                           ║
 ║                                                  ║
-║  1. Login di browser yang terbuka                ║
+║  1. Login di Chrome yang terbuka                 ║
 ║  2. Pilih mata kuliah ujian                      ║
-║  3. Pastikan soal PERTAMA sudah tampil            ║
+║  3. Tunggu soal PERTAMA tampil                   ║
 ║  4. Kembali ke terminal ini                      ║
-║  5. Tekan ENTER untuk mulai auto-answer           ║
+║  5. Tekan ENTER untuk mulai auto-answer          ║
 ╚══════════════════════════════════════════════════╝{C.RESET}
 """)
         input("  ⏎  Tekan ENTER setelah soal pertama tampil... ")
         print()
 
+        # Refresh referensi page (mungkin sudah pindah halaman saat login)
+        pages = context.pages
+        page  = pages[0] if pages else page
+
         # Loop jawab soal
-        nomor = 1
-        max_soal = 200  # batas pengaman
+        nomor   = 1
+        max_soal = 200
 
         while nomor <= max_soal:
-            # Cek apakah masih ada soal
+            # Refresh referensi page setiap iterasi (karena page bisa berganti)
+            pages = context.pages
+            if not pages:
+                ok("Browser ditutup. Selesai.")
+                break
+            page = pages[0]
+
             if not await ada_soal(page):
                 ok("Tidak ada soal lagi. Ujian selesai!")
                 break
@@ -515,34 +605,35 @@ async def main():
                 print()
                 warn("Gagal memproses soal ini.")
                 pilihan_user = input(
-                    f"  Pilih: [r] Retry  [s] Skip  [q] Quit → "
+                    "  [r] Retry  [s] Skip (klik Simpan manual dulu)  [q] Quit → "
                 ).strip().lower()
 
                 if pilihan_user == "q":
                     info("Dihentikan oleh user.")
                     break
                 elif pilihan_user == "s":
-                    warn("Skip soal ini - klik Simpan manual di browser!")
-                    input("  ⏎  Tekan ENTER setelah klik Simpan manual... ")
+                    warn("Silakan klik Simpan manual di browser!")
+                    input("  ⏎  Tekan ENTER setelah Anda klik Simpan... ")
                 else:
-                    info("Retry...")
+                    info("Retry soal ini...")
                     continue
 
             nomor += 1
-
         else:
-            warn(f"Sudah {max_soal} soal - loop dihentikan.")
+            warn(f"Batas {max_soal} soal tercapai.")
 
         print(f"""
 {C.GREEN}╔══════════════════════════════════════════════════╗
 ║  ✅ SELESAI!                                     ║
-║  Total soal diproses: {nomor-1:<3}                        ║
+║  Total soal diproses: {nomor-1:<3}                       ║
 ║                                                  ║
-║  Browser masih terbuka - periksa hasil ujian     ║
+║  Browser masih terbuka - silakan cek hasilnya    ║
 ╚══════════════════════════════════════════════════╝{C.RESET}
 """)
         input("  ⏎  Tekan ENTER untuk tutup browser... ")
+
         await browser.close()
+        chrome_proc.terminate()
 
 
 if __name__ == "__main__":
