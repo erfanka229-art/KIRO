@@ -434,11 +434,19 @@ async def main():
     print()
 
     async with async_playwright() as p:
-        # Buka browser (headful agar bisa login manual)
+        # Buka browser tanpa tanda-tanda automation
         browser = await p.chromium.launch(
             headless=False,
-            args=["--start-maximized"],
-            channel="chrome",   # pakai Chrome yang sudah install, jika ada
+            args=[
+                "--start-maximized",
+                "--disable-blink-features=AutomationControlled",  # sembunyikan webdriver flag
+                "--no-sandbox",
+                "--disable-infobars",                              # hapus banner "Chrome is controlled..."
+                "--disable-dev-shm-usage",
+                "--disable-extensions-except=",
+                "--disable-plugins-discovery",
+            ],
+            # Tidak pakai channel="chrome" agar lebih kompatibel lintas OS
         )
 
         context = await browser.new_context(
@@ -446,9 +454,26 @@ async def main():
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
+                "Chrome/124.0.0.0 Safari/537.36"
             ),
+            # Izinkan semua permission seperti browser biasa
+            java_script_enabled=True,
         )
+
+        # Hapus property navigator.webdriver agar tidak terdeteksi bot
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            // Hapus tanda-tanda Playwright/Chromium automation
+            delete window.navigator.__proto__.webdriver;
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['id-ID', 'id', 'en-US', 'en'],
+            });
+        """)
 
         page = await context.new_page()
 
