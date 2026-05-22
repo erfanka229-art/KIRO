@@ -196,68 +196,54 @@ def ekstrak_huruf(ai_response: str) -> str | None:
 async def baca_soal(page: Page) -> str | None:
     """Baca teks soal dari DOM halaman ujian Gunadarma.
     
-    Strategi: ambil semua teks visible di halaman (tanpa filter),
-    lalu cari baris yang paling mungkin jadi soal (sebelum radio button pertama).
+    CATATAN: Halaman Gunadarma memproteksi copy-paste teks,
+    tapi page.evaluate() membaca langsung dari DOM - tidak terpengaruh proteksi copy.
+    
+    Strategi: ambil teks yang berada SEBELUM radio button pertama di DOM.
+    Itulah soal yang sebenarnya.
     """
     await page.wait_for_load_state("domcontentloaded")
-    await asyncio.sleep(0.8)
+    await asyncio.sleep(0.5)
 
-    # Ambil seluruh innerText halaman - cara paling reliable
-    # Tidak ada filter regex yang bisa salah blokir soal
-    semua_teks = await page.evaluate("""
+    # Strategi terbaik: ambil teks yang ada SEBELUM radio button pertama
+    # Karena di Gunadarma: soal → pilihan (radio) → tombol simpan
+    soal = await page.evaluate("""
         () => {
-            // Kumpulkan semua text node visible, satu per baris
-            const lines = [];
+            // Cari radio button pertama
+            const radio = document.querySelector('input[type="radio"]');
+            if (!radio) return null;
+
+            // Kumpulkan semua teks SEBELUM radio button pertama di DOM
+            const texts = [];
             const walker = document.createTreeWalker(
                 document.body, NodeFilter.SHOW_TEXT, null
             );
             let node;
             while ((node = walker.nextNode())) {
+                // Berhenti saat sampai ke radio button pertama
+                if (radio.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) {
+                    // node ini SEBELUM radio, lanjutkan
+                } else {
+                    break; // sudah melewati radio, stop
+                }
                 const tag = node.parentElement?.tagName?.toLowerCase();
-                // Skip script/style
-                if (['script','style','noscript','head','meta'].includes(tag)) continue;
+                if (['script','style','noscript'].includes(tag)) continue;
                 const t = node.textContent.replace(/\\s+/g, ' ').trim();
-                if (t.length >= 5) lines.push(t);
+                if (t.length >= 8) texts.push(t);
             }
-            return lines;
+
+            // Filter teks UI yang jelas bukan soal
+            const ui = /^(pilihlah|waktu|simpan|copyright|bobot|penalti|sisa soal|dns|jika ujian|hasil ujian|gunadarma university)$/i;
+            const filtered = texts.filter(t => !ui.test(t.trim()));
+
+            // Soal adalah teks terpanjang sebelum pilihan
+            if (filtered.length === 0) return null;
+            filtered.sort((a, b) => b.length - a.length);
+            return filtered[0];
         }
     """)
 
-    if not semua_teks:
-        return None
-
-    debug(f"Total baris teks: {len(semua_teks)}")
-
-    # Cari baris yang merupakan soal:
-    # Soal biasanya:
-    # 1. Panjang 20-600 karakter
-    # 2. Bukan teks UI (simpan, waktu, pilihlah, copyright)
-    # 3. Mengandung kata tanya atau pernyataan akademis
-    # 4. Muncul SEBELUM pilihan jawaban
-    
-    ui_pattern = re.compile(
-        r'^(simpan|waktu|pilihlah|pass|tidak menjawab|copyright|'
-        r'gunadarma|logout|selamat|bobot|penalti|sisa soal|dns|'
-        r'jika ujian|hasil ujian|\d+\s*(detik|menit)|jam\s*\d+)'
-        r'|^\d+$',
-        re.I
-    )
-    
-    kandidat = []
-    for t in semua_teks:
-        if 20 <= len(t) <= 600 and not ui_pattern.match(t):
-            kandidat.append(t)
-    
-    if not kandidat:
-        # Fallback: kembalikan teks terpanjang yang bukan UI
-        for t in sorted(semua_teks, key=len, reverse=True):
-            if len(t) >= 20:
-                return t
-        return None
-    
-    # Pilih kandidat pertama (urutan DOM = urutan tampil di halaman)
-    # Soal selalu muncul sebelum pilihan jawaban
-    return kandidat[0]
+    return soal
 
 
 async def baca_pilihan(page: Page) -> list[dict]:
@@ -680,7 +666,7 @@ async def main():
 
         # Loop jawab soal
         nomor   = 1
-        max_soal = 200
+        max_soal = 500  # dinaikkan ke 500 soal
 
         while nomor <= max_soal:
             # Refresh referensi page setiap iterasi (karena page bisa berganti)
