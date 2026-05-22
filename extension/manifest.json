@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Auto Answer Ujian Gunadarma",
+  "version": "1.0",
+  "description": "Auto jawab soal ujian Gunadarma menggunakan Groq AI",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://semesterpendek.gunadarma.ac.id/*",
+    "https://api.groq.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://semesterpendek.gunadarma.ac.id/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}

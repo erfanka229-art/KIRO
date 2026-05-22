@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auto Answer Gunadarma</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 300px;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-size: 13px;
+    }
+    .header {
+      background: linear-gradient(90deg, #89b4fa, #cba6f7);
+      color: #1e1e2e;
+      padding: 14px 16px;
+      font-weight: bold;
+      font-size: 15px;
+      text-align: center;
+    }
+    .header small {
+      display: block;
+      font-size: 11px;
+      font-weight: normal;
+      margin-top: 2px;
+      opacity: 0.8;
+    }
+    .body { padding: 14px 16px; }
+    .status-bar {
+      background: #181825;
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      text-align: center;
+      color: #a6e3a1;
+      border: 1px solid #313244;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      color: #bac2de;
+      font-size: 12px;
+    }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      padding: 8px 10px;
+      background: #181825;
+      border: 1.5px solid #45475a;
+      border-radius: 7px;
+      color: #cdd6f4;
+      font-size: 13px;
+      outline: none;
+      margin-bottom: 10px;
+    }
+    input[type="text"]:focus, input[type="password"]:focus {
+      border-color: #89b4fa;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .row label { margin-bottom: 0; flex: 1; cursor: pointer; }
+    input[type="checkbox"] {
+      width: 16px; height: 16px;
+      accent-color: #89b4fa;
+      cursor: pointer;
+    }
+    .btn {
+      width: 100%;
+      padding: 9px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 13px;
+      margin-bottom: 7px;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary { background: #89b4fa; color: #1e1e2e; }
+    .btn-danger  { background: #f38ba8; color: #1e1e2e; }
+    .btn-secondary { background: #313244; color: #cdd6f4; }
+    .divider {
+      border: none;
+      border-top: 1px solid #313244;
+      margin: 12px 0;
+    }
+    .info {
+      font-size: 11px;
+      color: #585b70;
+      text-align: center;
+      line-height: 1.5;
+    }
+    .info a { color: #89b4fa; text-decoration: none; }
+    .info a:hover { text-decoration: underline; }
+    .toast {
+      display: none;
+      background: #a6e3a1;
+      color: #1e3a2e;
+      border-radius: 7px;
+      padding: 7px 12px;
+      text-align: center;
+      font-weight: bold;
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+    .eye-btn {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #585b70;
+      font-size: 15px;
+    }
+    .input-wrap { position: relative; }
+    .input-wrap input { padding-right: 34px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    🤖 Auto Answer Ujian
+    <small>Gunadarma × Groq AI</small>
+  </div>
+  <div class="body">
+    <div class="toast" id="toast">✅ Tersimpan!</div>
+    <div class="status-bar" id="status-bar">⏳ Memuat...</div>
+
+    <label>🔑 Groq API Key</label>
+    <div class="input-wrap">
+      <input type="password" id="api-key" placeholder="gsk_xxxxxxxxxxxxxxxxxxxx" />
+      <button class="eye-btn" id="toggle-eye" title="Tampilkan/Sembunyikan">👁</button>
+    </div>
+
+    <div class="row">
+      <input type="checkbox" id="auto-mode" />
+      <label for="auto-mode">🔄 Auto Mode (jawab + simpan otomatis setiap soal)</label>
+    </div>
+
+    <button class="btn btn-primary" id="btn-save">💾 Simpan Setting</button>
+    <button class="btn btn-secondary" id="btn-test">🧪 Test API Key</button>
+
+    <hr class="divider">
+
+    <button class="btn btn-danger" id="btn-clear">🗑 Hapus API Key</button>
+
+    <hr class="divider">
+
+    <div class="info">
+      Dapatkan API Key gratis di<br>
+      <a href="https://console.groq.com/keys" target="_blank">console.groq.com/keys</a><br><br>
+      Model: <b>llama-3.3-70b-versatile</b>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
